@@ -80,7 +80,7 @@ def current_st(G, ss, tt, normalized=False, weight='r', dtype=float, solver='lu'
     return I
 
 
-def i_arrange_g(g, la):
+def i_arrange(g, la):
     """
     Allocated comoponents in the logical architecture based on current flow
     In: g=phyiscal arch: network ,la=logical arch: {'sys':la_sys}
@@ -108,7 +108,7 @@ def i_arrange_g(g, la):
         # iterate through edges
         for i, j, d in net.edges(data=True):
             # get current distribution for edge
-            p, i_loc, j_loc = i_dist_g(g, la, sys, (i, j))
+            p, i_loc, j_loc = i_dist(g, la, sys, (i, j),key='loc')
             # print i, i_loc
             # print j, j_loc
             for loc in i_loc:
@@ -171,11 +171,11 @@ def i_arrange_g(g, la):
     return i_la
 
 
-def i_route_g(g, la):
+def i_route(g, la):
     """
     Get routings between components based on current flow
     In: g=phyiscal arch: network ,la=logical arch: {'sys':la_sys}
-    Out: ir_la logical architecture with routing distributions based on current distribution
+    Out: g_i physical architecture with routing distributions based on current distribution and locations
 
     For unallocated components, create super node with edges from possible locations
     if both unallocated - calculate current from super node to super node
@@ -192,7 +192,8 @@ def i_route_g(g, la):
         # iterate through edges
         for i, j, d in net.edges(data=True):
             # get current distribution for edge
-            p = i_dist_i(g, la, sys, (i, j))
+            p, i_al, j_al = i_dist(g, la, sys, (i, j), key='i')
+
             ir_la[sys][i][j]['i'] = dict(p)
 
             # add current to edges on edge network
@@ -219,76 +220,14 @@ def i_ANCR(g, la):
     if one allocated - calculate from each allocated location to super node
 
     """
-    i_la = i_arrange_g(g, la)
+    i_la = i_arrange(g, la)
 
-    ir_la = i_route_g(g, i_la)
+    ir_la= i_route(g, i_la)
 
     return ir_la
 
-def i_dist_i(g, la, sys, e):
-    """
-    Creates current flow for a single edge in logical architecture with allocated components. Component allocations
-    should be on the 'i' in the component dictionary.
-    In: g=phyiscal arch, el=logical edge: (loc_1,loc_2),la=logical arch,sys=system
-    Out: p_r=current distribution for that edge, i_loc=distribution of component_i, j_loc=distribution of component_j
 
-    For unallocated components, create super node with edges from possible locations
-    if both unallocated - calculate current from super node to super node
-    if one allocated - calculate from each allocated location to super node
-
-    """
-    #     print 'i={}, j={}'.format(e[0],e[1])
-
-    i_locs = dict(la['components'][e[0]]['i'])
-    j_locs = dict(la['components'][e[1]]['i'])
-
-    g_super = copy.deepcopy(la[sys][e[0]][e[1]]['g'])
-
-
-    # Get current distribution for locations
-    p_r = dict.fromkeys(g_super.nodes() + g_super.edges(), 0.0)  # probability dictionary
-
-    #     print 'i',i_locs
-    #     print 'j',j_locs
-    #
-    for i_loc, belief_i in i_locs.iteritems():
-        for j_loc, belief_j in j_locs.iteritems():
-            I = current_st(g_super, i_loc, j_loc)
-            for ele in p_r:
-                #               print i_loc,j_loc,ele
-
-                # check if element is formatted
-                if ele in I:
-                    # print ele
-                    switch = False
-                elif ele[::-1] in I:
-                    # print 'switch',(ele[1],ele[0])
-                    switch = True
-                    ele = ele[::-1]
-
-                p_ele = belief_i * belief_j * I[ele]
-                #                 print ele,p_ele
-                # print p_n
-                if not switch:
-                    p_r[ele] += p_ele
-                elif switch:
-                    p_r[ele[::-1]] += p_ele
-
-
-    # Get current distribution
-    p = {}  # probability dictionary without super nodes
-    for k in g.nodes() + g.edges():
-        if k in p_r:
-            p[k] = p_r[k]
-        else:
-            k_rev = (k[1], k[0])
-            p[k] = p_r[k_rev]
-
-    # p_r={k: p_r[k] for k in g.nodes()+g.edges()}
-
-    return p
-
-def i_dist_g(g, la, sys, e):
+def i_dist(g, la, sys, e,key='loc'):
     """
     Creates current flow for a single edge in logical architecture with unallocated components
     In: g=phyiscal arch, el=logical edge: (loc_1,loc_2),la=logical arch,sys=system
@@ -301,8 +240,8 @@ def i_dist_g(g, la, sys, e):
     """
     #     print 'i={}, j={}'.format(e[0],e[1])
 
-    i_locs_ini = dict(la['components'][e[0]]['loc'])
-    j_locs_ini = dict(la['components'][e[1]]['loc'])
+    i_locs_ini = dict(la['components'][e[0]][key])
+    j_locs_ini = dict(la['components'][e[1]][key])
 
     g_super = copy.deepcopy(la[sys][e[0]][e[1]]['g'])
 
@@ -423,68 +362,90 @@ def i_dist_g(g, la, sys, e):
 
     return p, i_al, j_al
 
-def project_current_distribution(g, LA_I):
+def i_mapping(g, i_la, E_list):
     """
-    Projects the current distributions on the logical architecture to the physical architecture
-    In:
-    LA_I = logical architecture with current distribution on edges, {sys:logical network: nodes+edges:prob occupied}
-    g = physical architecture
+    Get composite probability of routing between components based on current flow
+    In: g=phyiscal arch: network ,la=logical arch: {'sys':la_sys}, E_list=LA edges to be mapped: [(u,v,system)]
+    Out: p: probability that each element is g is used based on resistances and arrangments.
 
-    Out:
-    g_current = physical architecture network with probability of occupancy,
-        g_current[ele]={('sys1'):p_sys1, ('sys2'):p_sys2}
+    Iterate through each arrangement combination and get the probability of mappings for that arrangement.
+    Combine arrangement probabilities by weighting individual results by the probability of that arrangment.
     """
-    g_comp = g.copy()  # Track complementary probability P(not sys)
+    # get all possible arrangments and their probability
+    # identify components
+    E_components = [(u, v) for u, v, sys in E_list]
+    components = set(itertools.chain.from_iterable(E_components))
+    # print components
 
-    for sys, l_net in LA_I.iteritems():
-        # print sys
-        # create initial complementary node and edge values
-        nx.set_node_attributes(g_comp, sys, 1.0)
-        nx.set_edge_attributes(g_comp, sys, 1.0)
+    # map each component to an index
+    index_to_component_map = dict(zip(xrange(len(components)), components))
+    component_to_index_map = dict((y, x) for x, y in index_to_component_map.iteritems())
+    # print index_to_component_map
 
-        for i, j, d in l_net.edges(data=True):  # get edges within logical architecture
-            # d={node,edge: prob occupied}
-            #             print i,j,d
-            for n in g_comp.nodes():
-                g_comp.node[n][sys] *= (1.0 - d['i'][n])
+    # use indexes to generate list of lists for component locations
+    possible_locations = []
+    for index in xrange(len(components)):
+        c = index_to_component_map[index]
+        possible_locations.append(i_la['components'][c]['loc'].keys())
+    # print possible_locations
 
-            for ni, nj in g_comp.edges():
-                # print (ni,nj), d[(ni,nj)]
-                # print g_comp.edge[ni][nj][sys]
-                if (ni, nj) not in d['i']:
-                    g_comp[ni][nj][sys] *= (1.0 - d['i'][(nj, ni)])  # multiply by compliment
+    # get possible combinations of locations
+    arrangement_list = list(itertools.product(*possible_locations))
+    # print arrangement_list
+
+    # initalize results dictionary
+    p = dict.fromkeys(g.nodes() + g.edges(), 0.0)
+    p_ele_not_used = dict.fromkeys(g.nodes() + g.edges(), 1.0)
+
+    # track generated current matrices
+    current_tuples = {}
+
+    # iterate through arrangements to populate results
+    # iterate through arrangements
+    for a in arrangement_list:
+        p_arrange = 1.0  # get probability of the arrangement a
+        for a_index in xrange(len(a)):
+            loc_at_index = a[a_index]  # location at the index
+            c_at_index = index_to_component_map[a_index]  # component at the index
+            p_arrange *= i_la['components'][c_at_index]['i'][loc_at_index]
+        # print a, p_arrange
+
+        # get probability that the element is not used by any logical connection in E
+        p_ele_not_used_a = dict.fromkeys(g.nodes() + g.edges(), 1.0)
+        for u, v, sys in E_list:
+            # get the arrangement's component assignment
+            u_index = component_to_index_map[u]  # get index in arrangement
+            v_index = component_to_index_map[v]  # get index in arrangement
+            u_loc = a[u_index]  # location of u in arrangement
+            v_loc = a[v_index]  # location of v in arrangement
+
+            g_tuple = copy.deepcopy(i_la[sys][u][v]['g'])
+            I = current_st(g_tuple, u_loc, v_loc)
+
+            # increment for elements ing
+            for n in g.nodes():
+                p_ele_not_used_a[n] *= (1.0 - I[n])  # assemble probability that node is not used
+            for i, j in g.edges():
+                if (i, j) in I:
+                    edge_key = (i, j)
                 else:
-                    g_comp[ni][nj][sys] *= (1.0 - d['i'][(ni, nj)])  # multiply by compliment
+                    edge_key = (j, i)
+                p_ele_not_used_a[(i, j)] *= (1.0 - I[edge_key])  # assemble probability that edge is not used
 
-                    # for n,d in g_comp.nodes(data=True):
-                    # print n,d
+        # get probability the element was used by any logical connection in E
+        for k in p_ele_not_used_a:
+            # get probability the element was used and weight by the propbablity of hte arrangement
+            p_ele_used = p_arrange * (1.0 - p_ele_not_used_a[k])
 
-                    # for e1,e2,d in g_comp.edges(data=True):
-                    # print (e1,e2),d
+            # add probability of use to the results dictionary
+            p[k] += p_ele_used
+    return p
 
-    g_current = g_comp.copy()  # Get current flow: 1-Pc
-
-    for sys in LA_I:
-        for n in g_current.nodes():
-            g_current.node[n][sys] = 1.0 - g_comp.node[n][sys]
-        for i, j in g_current.edges():
-            g_current[i][j][sys] = 1.0 - g_comp.edge[i][j][sys]
-
-    """
-    for n,d in g_current.nodes(data=True):
-        print n,d
-
-    for e1,e2,d in g_current.edges(data=True):
-        print (e1,e2),d
-    """
-
-    return g_current
-
-def project_current_distribution_bus(g, LA_I,bus={}):
+def project_current_distribution_bus(g,i_la,bus={}):
     """
     Projects the current distributions on the logical architecture to the physical architecture
     In:
-    LA_I = logical architecture with current distribution on edges, {sys:logical network: nodes+edges:prob occupied}
+    i_la = logical architecture with component probabilities on 'i'
     g = physical architecture
     bus = bus locations for distribution system, {sys:nodes+edges}
 
@@ -492,63 +453,35 @@ def project_current_distribution_bus(g, LA_I,bus={}):
     g_current = physical architecture network with probability of occupancy,
         g_current[ele]={('sys1'):p_sys1, ('sys2'):p_sys2}
     """
-    g_comp = g.copy()  # Track complementary probability P(not sys)
 
-    for sys, l_net in LA_I.iteritems():
-        if sys not in LA_I['systems']:
-            continue
-        # print sys
-        # create initial complementary node and edge values
-        nx.set_node_attributes(g_comp, sys, 1.0)
-        nx.set_edge_attributes(g_comp, sys, 1.0)
+    g_current = g.copy()  # Get current flow: 1-Pc
 
-        for i, j, d in l_net.edges(data=True):  # get edges within logical architecture
-            # d={node,edge: prob occupied}
-            #             print i,j,d
-            for n in g_comp.nodes():
-                g_comp.node[n][sys] *= (1.0 - d['i'][n])
+    for sys in i_la['systems']:
+        #Create edge list for systems
+        E_list = i_la[sys].edges()
+        E_list = [(u, v, sys) for u, v in E_list]
 
-            for ni, nj in g_comp.edges():
-                # print (ni,nj), d[(ni,nj)]
-                # print g_comp.edge[ni][nj][sys]
-                if (ni, nj) not in d['i']:
-                    g_comp[ni][nj][sys] *= (1.0 - d['i'][(nj, ni)])  # multiply by compliment
-                else:
-                    g_comp[ni][nj][sys] *= (1.0 - d['i'][(ni, nj)])  # multiply by compliment
+        #Map edge list
+        p_sys=i_mapping(g,i_la,E_list)
 
-                    # for n,d in g_comp.nodes(data=True):
-                    # print n,d
-
-                    # for e1,e2,d in g_comp.edges(data=True):
-                    # print (e1,e2),d
-
-    g_current = g_comp.copy()  # Get current flow: 1-Pc
-
-    for sys in LA_I:
-        if sys not in LA_I['systems']:
-            continue
+        #Set mapping results to the
         if sys in bus:
-            sys_bus=bus[sys]
+            sys_bus = bus[sys]
         else:
-            sys_bus=nx.Graph()
+            sys_bus = nx.Graph()
         for n in g_current.nodes():
             if n in sys_bus.nodes():
-                g_current.node[n][sys]=1.0
+                g_current.node[n][sys] = 1.0
             else:
-                g_current.node[n][sys] = 1.0 - g_comp.node[n][sys]
+                g_current.node[n][sys] = p_sys[n]
         for i, j in g_current.edges():
-            if ((i,j) in sys_bus.edges()) or ((j,i) in sys_bus.edges()):
-                g_current[i][j][sys]=1.0
+            if ((i, j) in sys_bus.edges()) or ((j, i) in sys_bus.edges()):
+                g_current[i][j][sys] = 1.0
             else:
-                g_current[i][j][sys] = 1.0 - g_comp.edge[i][j][sys]
-
-    """
-    for n,d in g_current.nodes(data=True):
-        print n,d
-
-    for e1,e2,d in g_current.edges(data=True):
-        print (e1,e2),d
-    """
+                if (i,j) in p_sys:
+                    g_current[i][j][sys] = p_sys[(i,j)]
+                else:
+                    g_current[i][j][sys] = p_sys[(j, i)]
 
     return g_current
 
@@ -556,7 +489,7 @@ def project_current_distribution_bus(g, LA_I,bus={}):
 def system_draw_i(la):
     """
     Draw system from current distribution on logical architecture
-    In: ir_la=logical architecture with currrent on component locations and routings
+    In: la=logical architecture with currrent on component locations and routings
     Out: sys_draw=probabilistically drawn system, {sys: {logical edge: walk}}
     """
     # draw system from networks
@@ -757,9 +690,7 @@ def plot_current(g_current, LA_I, cutoff=0.0, scale=1.0, elev=15, angle=-75, fac
     cmap_list = ['Blues', 'Reds', 'Purples', 'Greens', 'Oranges']
     cmaps = {}
     count = 0
-    for sys in LA_I:
-        if sys not in LA_I['systems']:
-            continue
+    for sys in LA_I['systems']:
         cmaps[sys] = plt.cm.get_cmap(cmap_list[count])
         count += 1
 
@@ -966,6 +897,8 @@ def plot_setups(g, LA, cutoff=0.0, scale=1.0, elev=15, angle=-75, factor=2.0):
         for component in LA_I['components']:
             if component in LA_I[sys].nodes():
                 for l, prob in LA_I['components'][component]['loc'].iteritems():
+                    # if prob=='un':
+                    #     prob=1.0/len(LA_I['components'][component]['loc'].keys())
                     size[l] += prob
                     p_loc[l] = prob
 

@@ -127,24 +127,28 @@ def i_arrange_g(g, la):
     # get probability of locations
     # print p_loc
     for comp in p_loc:
-        comp_loc[comp] = {}
-        p_t = 0.0
-        for loc in p_loc[comp]:
-            p_l = 1.0
-            for prob in p_loc[comp][loc]:
-                p_l *= prob
-            # p_complement=reduce(lambda x, y: (1.0-x)*y, p_loc[comp][loc])
-            comp_loc[comp][loc] = p_l
-            p_t += p_l
-        # print comp, loc, p_l,p_t
+        if 'un' in la['components'][comp]['loc'].values():
+            #calculate locations
+            comp_loc[comp] = {}
+            p_t = 0.0
+            for loc in p_loc[comp]:
+                p_l = 1.0
+                for prob in p_loc[comp][loc]:
+                    p_l *= (prob)
+                # p_complement=reduce(lambda x, y: (1.0-x)*y, p_loc[comp][loc])
+                comp_loc[comp][loc] = p_l
+                p_t += p_l
+            # print comp, loc, p_l,p_t
 
-        #         print comp_loc
+            #         print comp_loc
 
-        # normalize
-        for loc in p_loc[comp]:
-            comp_loc[comp][loc] = comp_loc[comp][loc] / p_t
-
-            #     print comp_loc
+            # normalize
+            for loc in p_loc[comp]:
+                comp_loc[comp][loc] = comp_loc[comp][loc] / p_t
+                #     print comp_loc
+        else:
+            #use defined locations
+            comp_loc[comp]=dict(la['components'][comp]['loc'])
 
     i_la = copy.deepcopy(la)
     # print comp_loc
@@ -195,7 +199,11 @@ def i_route_g(g, la):
             for n in ir_la[sys][i][j]['g'].nodes():
                 ir_la[sys][i][j]['g'].node[n]['i'] = float(p[n])
             for a, b in ir_la[sys][i][j]['g'].edges():
-                ir_la[sys][i][j]['g'][a][b]['i'] = float(p[(a, b)])
+                if (a,b) not in p:
+                    key=(b,a)
+                else:
+                    key=(a,b)
+                ir_la[sys][i][j]['g'][a][b]['i'] = float(p[key])
 
     return ir_la
 
@@ -999,7 +1007,7 @@ def plot_locations2(g_current, LA, components, cutoff=0.0, scale=1.0, elev=15, a
 
     # reformat LA to convert 'un' into uniform
     LA_I = copy.deepcopy(LA)
-    for sys in LA:
+    for sys in LA['systems']:
         for LA_n in LA[sys].nodes():
             for l, prob in LA[sys].node[LA_n]['loc'].iteritems():
                 if prob == 'un':
@@ -1061,7 +1069,7 @@ def plot_locations2(g_current, LA, components, cutoff=0.0, scale=1.0, elev=15, a
     for comp in components:
         size = dict.fromkeys(g_current.nodes(), 1.0)
 
-        for sys in LA_I:
+        for sys in LA_I['systems']:
             if comp in LA_I[sys]:
                 locs = LA_I[sys].node[comp]['loc']
                 break
